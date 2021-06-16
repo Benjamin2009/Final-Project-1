@@ -1,0 +1,207 @@
+---
+title: "NYPD Shooting Incidents Data Analysis"
+author: "xxxx"
+date: "5/19/2021"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+---
+
+## 1. Background
+
+The gun violence rate in NYC spiked in the 1980s and 1990s, and then dropped, and as of 2017, NYC is among the lowest of major cities in the US. However, similar to many other cities, NYC witnessed a surge in gun violence in 2020. This project is a very brief analysis of shooting incidents in NYC over the past 15 years based on a dataset at [DATA.GOV](https://www.data.gov/). 
+
+This dataset is a breakdown of every shooting incident that occurred in NYC going back to 2006 through the end of the previous calendar year. The data is manually extracted every quarter and reviewed by the Office of Management Analysis and Planning before being posted on the NYPD website. Each record represents a shooting incident in NYC and includes information about the event, the location, and time of occurrence. In addition, information related to suspect and victim demographics is also included. The data footnotes and additional information about this dataset can be found here: <https://data.cityofnewyork.us/Public-Safety/NYPD-Shooting-Incident-Data-Historic-/833y-fsy8>. 
+
+
+
+## 2. Data Preparation
+
+### 2.1 Load the data
+
+```{r get_data}
+library(tidyverse)
+# load NYPD shooting incidents data (historic) from https://www.data.gov
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+# data saved in a variable "shooting_raw"
+shooting_raw <- read_csv(url)
+```
+
+### 2.2 A quick look of the dataset
+
+First I take a quick look of the dataset to have a general idea about its structure. 
+```{r quick_look}
+# A brief summary table
+knitr::kable(summary(shooting_raw))
+
+# To see the number of NA in this dataset
+# I plan to remove the rows with missing data when I clean the data
+sum(is.na(shooting_raw))
+```
+
+
+### 2.3 Data cleaning
+
+```{r tidy_data}
+# Get rid of the columns not needed
+shooting <- shooting_raw %>%
+    select(-c(INCIDENT_KEY,OCCUR_TIME, PRECINCT, JURISDICTION_CODE,
+              PERP_AGE_GROUP,PERP_SEX,LOCATION_DESC,STATISTICAL_MURDER_FLAG,
+              VIC_AGE_GROUP,VIC_SEX,X_COORD_CD,Y_COORD_CD,Lon_Lat))
+
+library(lubridate)
+# Convert OCCUR_DATE to date type
+shooting$OCCUR_DATE <-as.Date(shooting$OCCUR_DATE,format="%m/%d/%Y")
+  
+# Convert character columns to factors
+shooting$BORO <- as.factor(shooting$BORO)
+shooting$PERP_RACE<- as.factor(shooting$PERP_RACE)
+shooting$VIC_RACE <- as.factor(shooting$VIC_RACE)
+
+# Remove rows with missing data
+# I assume the data is missing at random, so I remove any rows with missing data. 
+# Some potential bias will be discussed at the end of this report. 
+shooting <- na.omit(shooting)
+# Check again to make sure there is no missing data
+sum(is.na(shooting))
+
+# Add another column "month_year" for future analysis
+shooting <- shooting %>% 
+    mutate(year_month = format(OCCUR_DATE, format = "%Y-%m")) 
+```
+
+
+### 2.4 A tidy table after data cleaning
+
+```{r summary}
+# A brief summary of the cleaned data 
+knitr::kable(summary(shooting), caption = "A summary of the NYPD shooting
+             incidents data")
+# Inspecting the first 10 rows
+knitr::kable(head(shooting))
+```
+
+## 3. Exploratory Data Analysis
+
+Now I have a tidy table. With a few questions in mind, I perform a brief exploratory data analysis. 
+
+### 3.1 Where did the shootings take place?
+
+To answer this question, I generate a dynamic map of shooting incidents in NYC based on the data from 2006 to 2020. The map can be zoomed and dragged to look at the number of shooting incidents in different locations. 
+
+```{r shooting_map}
+library(leaflet)
+leaflet(shooting) %>% 
+    addTiles() %>% # draw a map based on OpenStreetMap tiles
+    # add markers at the specified longitude and latitude
+    addCircleMarkers(lat = shooting$Latitude, lng = shooting$Longitude,
+                     clusterOptions = markerClusterOptions()) 
+```
+
+### 3.2 Which borough in NYC has the most gun shootings?
+I am interested to see whether certain borough has a higher number of shootings. 
+```{r BORO}
+library(ggplot2)
+library(ggthemes)
+shooting %>% 
+    ggplot(aes(BORO))+
+    geom_bar()+
+    xlab("Boroughs of New York City") +
+    ylab("Total number of shooting") +
+    ggtitle("Gun Shooting Incidents in New York City (2006-2020)") +
+    theme_economist() # use the economist theme to pretty the figure
+```    
+
+### 3.3 What is the racial distribution of perpetrators in each borough?
+
+```{r BORO_PERP}
+shooting %>% 
+    ggplot(aes(BORO)) +
+    geom_bar(mapping = aes(x=BORO,fill = PERP_RACE), position = "fill") +
+    xlab("Boroughs of New York City") +
+    ylab("Percentage") +
+    ggtitle("Distribution of perpetrators in each borough in NYC") +
+    theme_economist() + 
+    theme(legend.title = element_text(size = 8),legend.text = element_text(size = 7))
+```    
+
+
+### 3.4 What is the racial distribution of victims in each borough?
+
+```{r BORO_VIC}
+shooting %>% 
+    ggplot(aes(BORO)) +
+    geom_bar(mapping = aes(x = BORO,fill = VIC_RACE), position = "fill") +
+    xlab("Boroughs of New York City") +
+    ylab("Percentage") +
+    ggtitle("Distribution of victims in each borough in NYC") +
+    theme_economist() +
+    theme(legend.title = element_text(size = 8),legend.text=element_text(size = 7))
+```    
+
+### 3.5 Is the number of shootings dropped over the past 15 years?
+
+```{r shooting_trend}
+month_count <- shooting %>% 
+    group_by(year_month) %>% # group by year and by month
+    summarise(count = n()) # count the number of observations in each month
+month_count
+month_count <-as.data.frame(month_count)
+month_count$year_month2 <-as.Date(paste(month_count$year_month,"01",sep = "-","%Y-%m-%d"))
+ggplot(month_count,aes(x = year_month2,y = count))+
+    geom_line() +
+    ggtitle("NYC shooting incidents per month (2006-2020)") +
+    scale_x_date(NULL,date_labels = "%b %Y",breaks = "year") +
+    theme(axis.text.x = element_text(angle = 45,hjust = 1,vjust = 1))
+```
+
+Generally, the number of shootings in NYC has been dramatically decreased since 2006. However, the shootings surged in 2020 to levels not seen in years. Additionally, the number of shootings has a seasonal pattern, with more during the summer and fewer during the winter.
+
+### 3.6 Can we predict the number of shootings in NYC in 2021?   
+
+#### 3.6.1 A predictive model based on the Holter-Winters' method
+I chose the Holt-Winters model, which could model three aspects of the time series: average (the typical value), trend (the slope over time), and seasonality (the cyclical repeating pattern). This model uses exponential smoothing to encode data from the past and use them to predict "typical" values for the present and future.  
+
+```{r shooting_model}
+library(forecast)
+# I use the data since 2011 to train the model
+series <- ts(month_count[61:180,2],frequency = 12) 
+shooting_model <- HoltWinters(series,seasonal = "multi")
+shooting_model
+plot(shooting_model,ann = F,xaxt = "n")
+title("Holt-Winters Forecasting Model")
+```
+
+#### 3.6.2 Forecasting of shooting numbers in NYC in 2021
+```{r shooting_forecast}
+# predict the number of shootings in each month of 2021
+shooting_2021 <-forecast(shooting_model,h=12)
+shooting_2021
+plot(shooting_2021,ann = F,xaxt = "n")
+title("Forecasts of Shooting Incidents from Holt-Winters Model")
+text(11.5,129,"2021",col = "blue") # add a label "2021" to highlight the prediction
+```
+
+## 4. Conclusions
+
+* The gun shooting incidents are not evenly distributed across NYC. The Brooklyn and Staten island boroughs have the highest and lowest number of shooting incidents, respectively, over the past 15 years. 
+* The analysis indicates a significantly higher number of shootings for African Americans (both perpetrators and victims) than that of other ethnic groups. 
+* In general, the number of shootings in NYC has been dramatically decreased since 2006, except last year the shootings surged to levels not seen in years. Additionally, there is a clear seasonal pattern, with more observations in the summer and fewer in the winter. 
+* A predictive model was created to predict the number of shootings in 2021, and it would be interesting to compare with the real data when they become fully available. Other factors could be included for further analysis, such as the COVID pandemic, increased unemployment rate, and reduced police enforcement. 
+
+
+## 5. Potential Bias
+
+* According to the data footnote, only shooting incidents resulting in an injured victim were included in the dataset. This may underestimate the severity of gun violence in NYC. 
+* As stated in the background session, the data is manually extracted every quarter and reviewed by the Office of Management Analysis and Planning before being posted on the NYPD website. If the person reviewing the data had some personal bias, it could skew the dataset. 
+* My personal bias might be that I assume the missing data occurred randomly and it would not interfere with my analysis if the missing data were removed. The results of my analysis turned out to be very similar to what I would expect personally, which further confirmed my assumption. However, I reminded myself to be very careful and I actually reran my data analysis without removing the missing data. Fortunately, the conclusions generally remained valid, probably because my analysis was very simple and exploratory. If a deeper analysis was performed, omitting the observations with missing data could lead to analysis pitfalls and cause inaccurate conclusions. 
+
+## 6. Reference
+* Crime in New York City <https://en.wikipedia.org/wiki/Crime_in_New_York_City>
+
+## 7. SessionInfo
+    
+```{r sessionInfo}
+sessionInfo()
+```
